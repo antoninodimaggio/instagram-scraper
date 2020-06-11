@@ -12,6 +12,7 @@ import logging.config
 import hashlib
 import os
 import pickle
+import random
 import re
 import socket
 import sys
@@ -212,7 +213,7 @@ class InstagramScraper(object):
                 if retry < MAX_RETRIES:
                     self.logger.warning('Retry after exception {0} on {1}'.format(repr(e), url))
                     self.sleep(retry_delay)
-                    retry_delay = min( 2 * retry_delay, MAX_RETRY_DELAY )
+                    retry_delay = min( 2 * retry_delay, MAX_RETRY_DELAY)
                     retry = retry + 1
                     continue
                 else:
@@ -423,9 +424,7 @@ class InstagramScraper(object):
     def __query_comments(self, shortcode, end_cursor=''):
         params = QUERY_COMMENTS_VARS.format(shortcode, end_cursor)
         self.update_ig_gis_header(params)
-
         resp = self.get_json(QUERY_COMMENTS.format(params))
-
         if resp is not None:
             payload = json.loads(resp)['data']['shortcode_media']
 
@@ -469,9 +468,8 @@ class InstagramScraper(object):
                     media_exec = concurrent.futures.ThreadPoolExecutor(max_workers=5)
 
                 iter = 0
-                for item in tqdm.tqdm(media_generator(value), desc='Searching {0} for posts'.format(value), unit=" media",
+                for item in tqdm.tqdm(media_generator(value), desc=f'Searching {value} for posts', unit=" media",
                                       disable=self.quiet):
-
                     if self.filter_locations:
                         if item.get("location") is None or self.get_key_from_value(self.filter_locations, item["location"].get("id")) is None:
                             continue
@@ -489,7 +487,6 @@ class InstagramScraper(object):
 
                     if self.media_metadata or self.comments or self.include_location:
                         self.posts.append(item)
-
                     iter = iter + 1
                     if self.maximum != 0 and iter >= self.maximum:
                         break
@@ -526,7 +523,6 @@ class InstagramScraper(object):
     def __query_gen(self, url, variables, entity_name, query, end_cursor=''):
         """Generator for hashtag and location."""
         nodes, end_cursor = self.__query(url, variables, entity_name, query, end_cursor)
-
         if nodes:
             try:
                 while True:
@@ -543,9 +539,7 @@ class InstagramScraper(object):
     def __query(self, url, variables, entity_name, query, end_cursor):
         params = variables.format(query, end_cursor)
         self.update_ig_gis_header(params)
-
         resp = self.get_json(url.format(params))
-
         if resp is not None:
             payload = json.loads(resp)['data'][entity_name]
 
@@ -600,7 +594,6 @@ class InstagramScraper(object):
 
     def __get_media_details(self, shortcode):
         resp = self.get_json(VIEW_MEDIA_URL.format(shortcode))
-
         if resp is not None:
             try:
                 return json.loads(resp)['graphql']['shortcode_media']
@@ -885,7 +878,6 @@ class InstagramScraper(object):
 
     def fetch_highlight_stories(self, user_id):
         """Fetches the user's highlight stories."""
-
         resp = self.get_json(HIGHLIGHT_STORIES_USER_ID_URL.format(user_id))
 
         if resp is not None:
@@ -907,7 +899,7 @@ class InstagramScraper(object):
                     stories.extend(self.__fetch_stories(HIGHLIGHT_STORIES_REEL_ID_URL.format('%22%2C%22'.join(str(x) for x in ids_chunk)), fetching_highlights_metadata=True))
 
                 return stories
-              
+
         return []
 
     def fetch_broadcasts(self, user_id):
@@ -974,7 +966,6 @@ class InstagramScraper(object):
     def __query_media(self, id, end_cursor=''):
         params = QUERY_MEDIA_VARS.format(id, end_cursor)
         self.update_ig_gis_header(params)
-
         resp = self.get_json(QUERY_MEDIA.format(params))
 
         if resp is not None:
@@ -1074,7 +1065,7 @@ class InstagramScraper(object):
 
         if self.filter_locations:
             save_dir = os.path.join(save_dir, self.get_key_from_value(self.filter_locations, item["location"]["id"]))
-        
+
         files_path = []
 
         for full_url, base_name in self.templatefilename(item):
@@ -1101,7 +1092,6 @@ class InstagramScraper(object):
                             try:
                                 downloaded_before = downloaded
                                 headers['Range'] = 'bytes={0}-'.format(downloaded_before)
-
                                 with self.session.get(url, cookies=self.cookies, headers=headers, stream=True, timeout=CONNECT_TIMEOUT) as response:
                                     if response.status_code == 404 or response.status_code == 410:
                                         #on 410 error see issue #343
@@ -1377,7 +1367,7 @@ class InstagramScraper(object):
     @staticmethod
     def get_locations_from_file(locations_file):
         """
-        parse an ini like file with sections composed of headers, [locaiton], 
+        parse an ini like file with sections composed of headers, [locaiton],
         and arguments that are location ids
         """
         locations={}
@@ -1444,6 +1434,21 @@ class InstagramScraper(object):
                 pickle.dump(self.session.cookies, f)
 
 
+    def smart_scrape_captions(self, file_name, end_cursor):
+        params = QUERY_HASHTAG_VARS.format(self.username[0], end_cursor)
+        self.update_ig_gis_header(params)
+        resp = self.get_json(QUERY_HASHTAG.format(params))
+        payload = json.loads(resp)['data']['hashtag']
+        posts = payload['edge_hashtag_to_media']
+        self.save_json(payload, dst=f'./{self.destination}/{self.username[0]}/{file_name}.json')
+        end_cursor = posts['page_info']['end_cursor']
+        return end_cursor
+
+
+    def repeat_smart_scrape(self, iters):
+        end_cursor = ''
+        for file_name in tqdm.tqdm(range(0, iters), desc='Scraping hashtag pages', unit_scale=True):
+            end_cursor = self.smart_scrape_captions(file_name, end_cursor)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1524,8 +1529,8 @@ def main():
                         help='Retry download attempts endlessly when errors are received')
     parser.add_argument('--verbose', '-v', type=int, default=0, help='Logging verbosity level')
     parser.add_argument('--template', '-T', type=str, default='{urlname}', help='Customize filename template')
-    parser.add_argument('--log_destination', '-l', type=str, default='', help='destination folder for the instagram-scraper.log file')
-
+    parser.add_argument('--log-destination', '-l', type=str, default='', help='destination folder for the instagram-scraper.log file')
+    parser.add_argument('--caption-queries', type=int, default=1, help='how many times should we call smart captions')
     args = parser.parse_args()
 
     if (args.login_user and args.login_pass is None) or (args.login_user is None and args.login_pass):
@@ -1563,7 +1568,6 @@ def main():
         locations.setdefault('', [])
         locations[''] = InstagramScraper.parse_delimited_str(','.join(args.filter_location))
         args.filter_locations = locations
-        
     if args.media_types and len(args.media_types) == 1 and re.compile(r'[,;\s]+').findall(args.media_types[0]):
         args.media_types = InstagramScraper.parse_delimited_str(args.media_types[0])
 
@@ -1590,7 +1594,8 @@ def main():
                 return
 
     if args.tag:
-        scraper.scrape_hashtag()
+        # scraper.scrape_hashtag()
+        scraper.repeat_smart_scrape(args.caption_queries)
     elif args.location:
         scraper.scrape_location()
     elif args.search_location:
