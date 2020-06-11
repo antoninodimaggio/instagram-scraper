@@ -12,7 +12,6 @@ import logging.config
 import hashlib
 import os
 import pickle
-import random
 import re
 import socket
 import sys
